@@ -14,6 +14,9 @@ services:
       - "8888:8888" # Stats port (localhost only)
     environment:
       - SECRET=${SECRET:-}  # Set in .env file
+    volumes:
+      - ./proxy-secret:/app/proxy-secret:ro
+      - ./proxy-multi.conf:/app/proxy-multi.conf:ro
     command: [
       "-u", "nobody",
       "-p", "8888", 
