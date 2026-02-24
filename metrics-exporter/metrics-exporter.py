@@ -66,8 +66,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_metrics()
         elif self.path == '/health':
             self.send_health()
-        elif self.path == '/' or self.path == '/dashboard':
-            self.send_dashboard()
         elif self.path == '/status':
             self.send_status_json()
         else:
@@ -141,25 +139,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}, indent=2).encode('utf-8'))
 
-    def send_dashboard(self):
-        try:
-            # Читаем HTML файл
-            dashboard_path = os.path.join(os.path.dirname(__file__), 'dashboard.html')
-            with open(dashboard_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(html_content.encode('utf-8'))
-        except FileNotFoundError:
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"Dashboard file not found")
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(f"Error loading dashboard: {str(e)}".encode('utf-8'))
 
     def get_mtproxy_metrics(self):
         """Получает метрики от MTProxy"""
@@ -350,7 +329,6 @@ def main():
     port = 9090
     server = HTTPServer(('0.0.0.0', port), MetricsHandler)
     print(f"MTProxy Metrics Exporter started on port {port}")
-    print(f"Dashboard: http://localhost:{port}/")
     print(f"Metrics: http://localhost:{port}/metrics")
     print(f"Health: http://localhost:{port}/health")
     print(f"Status: http://localhost:{port}/status")
