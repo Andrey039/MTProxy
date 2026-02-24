@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  mtproxy:
+    build: .
+    # image: your-dockerhub-username/mtproxy:latest  # Uncomment to use pre-built image
+    container_name: mtproxy
+    restart: unless-stopped
+    ports:
+      - "443:443"   # Client port
+      - "8888:8888" # Stats port (localhost only)
+    environment:
+      - SECRET=${SECRET:-}  # Set in .env file
+    command: [
+      "-u", "nobody",
+      "-p", "8888", 
+      "-H", "443",
+      "-S", "${SECRET}",
+      "-M", "1"
+    ]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
