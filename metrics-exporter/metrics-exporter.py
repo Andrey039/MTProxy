@@ -7,12 +7,53 @@ MTProxy Metrics Exporter
 import json
 import re
 import time
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen
 from urllib.error import URLError
 
 
 class MetricsHandler(BaseHTTPRequestHandler):
+    # Хранение истории для расчета rate
+    _history = deque(maxlen=60)  # 60 записей = 5 минут при интервале 5 сек
+    _last_metrics = {}
+    
+    @classmethod
+    def update_history(cls, metrics):
+        """Обновляет историю метрик для расчета rate"""
+        current_time = time.time()
+        cls._history.append({
+            'timestamp': current_time,
+            'tot_forwarded_queries': metrics.get('tot_forwarded_queries', 0),
+            'tot_forwarded_responses': metrics.get('tot_forwarded_responses', 0)
+        })
+        cls._last_metrics = metrics
+    
+    @classmethod
+    def calculate_rates(cls):
+        """Вычисляет rate метрики"""
+        if len(cls._history) < 2:
+            return {'queries_per_sec': 0, 'responses_per_sec': 0}
+        
+        # Берем данные за последние 5 минут или все доступные
+        recent = list(cls._history)[-12:]  # последние 12 записей = 1 минута
+        if len(recent) < 2:
+            recent = list(cls._history)
+        
+        first = recent[0]
+        last = recent[-1]
+        
+        time_diff = last['timestamp'] - first['timestamp']
+        if time_diff <= 0:
+            return {'queries_per_sec': 0, 'responses_per_sec': 0}
+        
+        queries_diff = last['tot_forwarded_queries'] - first['tot_forwarded_queries']
+        responses_diff = last['tot_forwarded_responses'] - first['tot_forwarded_responses']
+        
+        return {
+            'queries_per_sec': queries_diff / time_diff,
+            'responses_per_sec': responses_diff / time_diff
+        }
     def do_GET(self):
         if self.path == '/metrics':
             self.send_metrics()
@@ -25,7 +66,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def send_metrics(self):
         try:
             metrics = self.get_mtproxy_metrics()
-            response = self.format_prometheus_metrics(metrics)
+            self.update_history(metrics)
+            rates = self.calculate_rates()
+            response = self.format_prometheus_metrics(metrics, rates)
             
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
@@ -71,7 +114,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except URLError as e:
             raise Exception(f"Failed to connect to MTProxy stats: {e}")
 
-    def format_prometheus_metrics(self, metrics):
+    def format_prometheus_metrics(self, metrics, rates):
         """Форматирует метрики в формате Prometheus"""
         output = []
         
@@ -100,6 +143,17 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 output.append(f'# TYPE mtproxy_{metric_name} gauge')
                 output.append(f'mtproxy_{metric_name} {value} {timestamp}')
                 output.append('')
+        
+        # Rate метрики (трафик в секунду)
+        output.append('# HELP mtproxy_queries_per_second Rate of forwarded queries per second')
+        output.append('# TYPE mtproxy_queries_per_second gauge')
+        output.append(f'mtproxy_queries_per_second {rates["queries_per_sec"]:.2f} {timestamp}')
+        output.append('')
+        
+        output.append('# HELP mtproxy_responses_per_second Rate of forwarded responses per second')
+        output.append('# TYPE mtproxy_responses_per_second gauge')
+        output.append(f'mtproxy_responses_per_second {rates["responses_per_sec"]:.2f} {timestamp}')
+        output.append('')
         
         # Статус здоровья (1 = healthy, 0 = unhealthy)
         health_status = 1 if metrics.get('ready_outbound_connections', 0) > 0 else 0

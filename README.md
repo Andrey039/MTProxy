@@ -11,23 +11,28 @@ cd MTProxy
 cp .env.example .env
 ```
 
-2. Generate secret:
+2. Configure Docker Hub username in `.env`:
+```bash
+DOCKERHUB_USERNAME=your_dockerhub_username
+```
+
+3. Generate secret:
 ```bash
 head -c 16 /dev/urandom | xxd -ps
 ```
 
-3. Edit `.env` file and set your secret:
+4. Edit `.env` file and set your secret:
 ```bash
 nano .env
 ```
 
-4. Download Telegram configuration files:
+5. Download Telegram configuration files:
 ```bash
 curl -s https://core.telegram.org/getProxySecret -o proxy-secret
 curl -s https://core.telegram.org/getProxyConfig -o proxy-multi.conf
 ```
 
-5. Start the proxy:
+6. Start the proxy:
 ```bash
 docker-compose up -d
 ```
@@ -95,6 +100,24 @@ docker-compose restart
 ```bash
 docker build -t mtproxy .
 ```
+
+## Using Pre-built Images
+
+Images are automatically built and tagged with commit SHA:
+
+```bash
+# Use specific version
+IMAGE_TAG=abc1234 docker-compose up -d
+
+# Use latest
+docker-compose up -d
+```
+
+Available tags:
+- `latest` - latest build from main branch
+- `abc1234` - specific commit (7-character SHA)
+- `main` - latest from main branch
+- `v1.0.0` - semantic version tags
 
 ## Environment Variables
 

@@ -2,8 +2,7 @@ version: '3.8'
 
 services:
   mtproxy:
-    build: .
-    # image: your-dockerhub-username/mtproxy:latest  # Uncomment to use pre-built image
+    image: ${DOCKERHUB_USERNAME}/mtproxy:${IMAGE_TAG:-latest}
     container_name: mtproxy
     restart: unless-stopped
     environment:
@@ -28,7 +27,7 @@ services:
       start_period: 10s
 
   metrics-exporter:
-    build: ./metrics-exporter
+    image: ${DOCKERHUB_USERNAME}/mtproxy-metrics:${IMAGE_TAG:-latest}
     container_name: mtproxy-metrics
     restart: unless-stopped
     network_mode: "host"
