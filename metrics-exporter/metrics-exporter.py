@@ -66,12 +66,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_metrics()
         elif self.path == '/health':
             self.send_health()
-        elif self.path == '/status':
-            self.send_human_status()
         elif self.path == '/' or self.path == '/dashboard':
             self.send_dashboard()
-        elif self.path == '/debug':
-            self.send_debug_metrics()
+        elif self.path == '/status':
+            self.send_status_json()
         else:
             self.send_response(404)
             self.end_headers()
@@ -95,30 +93,48 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def send_health(self):
         try:
             metrics = self.get_mtproxy_metrics()
-            status = "healthy" if metrics.get('ready_outbound_connections', 0) > 0 else "unhealthy"
+            ready_connections = metrics.get('ready_outbound_connections', 0)
             
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            response = {"status": status, "ready_connections": metrics.get('ready_outbound_connections', 0)}
+            # Прокси готов если есть готовые соединения к Telegram серверам
+            if ready_connections > 0:
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = {
+                    "status": "healthy", 
+                    "ready_connections": int(ready_connections)
+                }
+            else:
+                self.send_response(503)  # Service Unavailable
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                response = {
+                    "status": "unhealthy", 
+                    "ready_connections": 0,
+                    "error": "No ready connections to Telegram servers"
+                }
+            
             self.wfile.write(json.dumps(response).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode('utf-8'))
+            self.wfile.write(json.dumps({
+                "status": "error", 
+                "error": str(e)
+            }).encode('utf-8'))
 
-    def send_human_status(self):
+    def send_status_json(self):
         try:
             metrics = self.get_mtproxy_metrics()
             self.update_history(metrics)
             rates = self.calculate_rates()
-            response = self.format_human_status(metrics, rates)
+            response = self.format_simple_status(metrics, rates)
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.end_headers()
-            self.wfile.write(json.dumps(response, indent=2, ensure_ascii=False).encode('utf-8'))
+            self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
         except Exception as e:
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
@@ -145,30 +161,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(f"Error loading dashboard: {str(e)}".encode('utf-8'))
 
-    def send_debug_metrics(self):
-        try:
-            metrics = self.get_mtproxy_metrics()
-            
-            # Фильтруем метрики связанные с трафиком
-            traffic_metrics = {}
-            for key, value in metrics.items():
-                if any(word in key.lower() for word in ['byte', 'traffic', 'network', 'buffer', 'read', 'write']):
-                    traffic_metrics[key] = value
-            
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.end_headers()
-            response = {
-                "all_metrics_count": len(metrics),
-                "traffic_related_metrics": traffic_metrics,
-                "sample_other_metrics": dict(list(metrics.items())[:10])
-            }
-            self.wfile.write(json.dumps(response, indent=2).encode('utf-8'))
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(f"Debug error: {str(e)}".encode('utf-8'))
-
     def get_mtproxy_metrics(self):
         """Получает метрики от MTProxy"""
         try:
@@ -188,11 +180,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         except URLError as e:
             raise Exception(f"Failed to connect to MTProxy stats: {e}")
 
-    def format_human_status(self, metrics, rates):
-        """Форматирует статус в человекочитаемом виде"""
-        
+    def format_simple_status(self, metrics, rates):
+        """Простой статус для дашборда"""
         def format_bytes(bytes_value):
-            """Конвертирует байты в читаемый формат"""
             if bytes_value < 1024:
                 return f"{bytes_value} B"
             elif bytes_value < 1024 * 1024:
@@ -203,7 +193,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"
         
         def format_speed(bytes_per_sec):
-            """Конвертирует байты/сек в читаемый формат"""
             if bytes_per_sec < 1024:
                 return f"{bytes_per_sec:.1f} B/s"
             elif bytes_per_sec < 1024 * 1024:
@@ -212,21 +201,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
         
         def format_uptime(seconds):
-            """Конвертирует секунды в читаемый формат времени"""
             if seconds < 60:
-                return f"{int(seconds)} сек"
+                return f"{int(seconds)}s"
             elif seconds < 3600:
-                return f"{int(seconds // 60)} мин {int(seconds % 60)} сек"
+                return f"{int(seconds // 60)}m {int(seconds % 60)}s"
             elif seconds < 86400:
-                hours = int(seconds // 3600)
-                minutes = int((seconds % 3600) // 60)
-                return f"{hours} ч {minutes} мин"
+                return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
             else:
-                days = int(seconds // 86400)
-                hours = int((seconds % 86400) // 3600)
-                return f"{days} дн {hours} ч"
+                return f"{int(seconds // 86400)}d {int((seconds % 86400) // 3600)}h"
         
-        # Определяем статус
+        # Статус
         ready_connections = metrics.get('ready_outbound_connections', 0)
         if ready_connections > 10:
             status = "Excellent"
@@ -237,24 +221,19 @@ class MetricsHandler(BaseHTTPRequestHandler):
         else:
             status = "Problems"
         
-        # Общая статистика - попробуем разные метрики трафика
-        total_read = metrics.get('tcp_readv_bytes', 0)
-        total_write = metrics.get('tcp_writev_bytes', 0)
+        # Трафик
+        tcp_read = metrics.get('tcp_readv_bytes', 0)
+        tcp_write = metrics.get('tcp_writev_bytes', 0)
+        network_buffers = metrics.get('total_network_buffers_used_size', 0)
         
-        # Альтернативные метрики трафика
-        network_read = metrics.get('total_network_buffers_used_size', 0)
-        
-        # Используем наибольшее значение
-        if network_read > total_read + total_write:
-            total_traffic = network_read
-            total_read = network_read // 2  # примерное разделение
-            total_write = network_read // 2
+        if network_buffers > (tcp_read + tcp_write) * 2:
+            total_traffic = network_buffers
+            total_read = int(total_traffic * 0.4)
+            total_write = int(total_traffic * 0.6)
         else:
-            total_traffic = total_read + total_write
-        
-        current_read_speed = rates.get('bytes_read_per_sec', 0)
-        current_write_speed = rates.get('bytes_write_per_sec', 0)
-        current_total_speed = current_read_speed + current_write_speed
+            total_read = tcp_read
+            total_write = tcp_write
+            total_traffic = tcp_read + tcp_write
         
         return {
             "status": status,
@@ -271,9 +250,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     "total": format_bytes(total_traffic)
                 },
                 "current_speed": {
-                    "download": format_speed(current_read_speed),
-                    "upload": format_speed(current_write_speed),
-                    "total": format_speed(current_total_speed)
+                    "download": format_speed(rates.get('bytes_read_per_sec', 0)),
+                    "upload": format_speed(rates.get('bytes_write_per_sec', 0)),
+                    "total": format_speed(rates.get('bytes_read_per_sec', 0) + rates.get('bytes_write_per_sec', 0))
                 }
             },
             "requests": {
@@ -288,14 +267,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
             },
             "telegram_servers": {
                 "ready": metrics.get('ready_targets', 0),
-                "active": metrics.get('active_targets', 0),
-                "total_connections": metrics.get('outbound_connections', 0)
+                "active": metrics.get('active_targets', 0)
             },
             "performance": {
                 "cpu_idle": f"{metrics.get('average_idle_percent', 0):.1f}%",
                 "memory_mb": f"{metrics.get('vmrss_bytes', 0) / (1024 * 1024):.1f} MB"
-            },
-            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
         }
 
     def format_prometheus_metrics(self, metrics, rates):
@@ -313,6 +290,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'tcp_readv_bytes': 'Total bytes read from TCP sockets',
             'tcp_writev_bytes': 'Total bytes written to TCP sockets',
             'total_network_buffers_used_size': 'Network buffers used size',
+            'total_network_buffers_allocated_bytes': 'Network buffers allocated bytes',
+            'total_used_buffers_size': 'Total used buffers size',
+            'allocated_buffer_bytes': 'Allocated buffer bytes',
             'uptime': 'MTProxy uptime in seconds',
             'qps_get': 'Queries per second',
             'http_qps': 'HTTP queries per second',
@@ -374,7 +354,6 @@ def main():
     print(f"Metrics: http://localhost:{port}/metrics")
     print(f"Health: http://localhost:{port}/health")
     print(f"Status: http://localhost:{port}/status")
-    print(f"Debug: http://localhost:{port}/debug")
     
     try:
         server.serve_forever()
