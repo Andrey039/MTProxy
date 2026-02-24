@@ -25,7 +25,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         cls._history.append({
             'timestamp': current_time,
             'tot_forwarded_queries': metrics.get('tot_forwarded_queries', 0),
-            'tot_forwarded_responses': metrics.get('tot_forwarded_responses', 0)
+            'tot_forwarded_responses': metrics.get('tot_forwarded_responses', 0),
+            'tcp_readv_bytes': metrics.get('tcp_readv_bytes', 0),
+            'tcp_writev_bytes': metrics.get('tcp_writev_bytes', 0)
         })
         cls._last_metrics = metrics
     
@@ -49,10 +51,14 @@ class MetricsHandler(BaseHTTPRequestHandler):
         
         queries_diff = last['tot_forwarded_queries'] - first['tot_forwarded_queries']
         responses_diff = last['tot_forwarded_responses'] - first['tot_forwarded_responses']
+        read_bytes_diff = last['tcp_readv_bytes'] - first['tcp_readv_bytes']
+        write_bytes_diff = last['tcp_writev_bytes'] - first['tcp_writev_bytes']
         
         return {
             'queries_per_sec': queries_diff / time_diff,
-            'responses_per_sec': responses_diff / time_diff
+            'responses_per_sec': responses_diff / time_diff,
+            'bytes_read_per_sec': read_bytes_diff / time_diff,
+            'bytes_write_per_sec': write_bytes_diff / time_diff
         }
     def do_GET(self):
         if self.path == '/metrics':
@@ -126,6 +132,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
             'outbound_connections': 'Active outbound connections to Telegram',
             'tot_forwarded_queries': 'Total forwarded queries from clients',
             'tot_forwarded_responses': 'Total forwarded responses from Telegram',
+            'tcp_readv_bytes': 'Total bytes read from TCP sockets',
+            'tcp_writev_bytes': 'Total bytes written to TCP sockets',
             'uptime': 'MTProxy uptime in seconds',
             'qps_get': 'Queries per second',
             'http_qps': 'HTTP queries per second',
@@ -153,6 +161,17 @@ class MetricsHandler(BaseHTTPRequestHandler):
         output.append('# HELP mtproxy_responses_per_second Rate of forwarded responses per second')
         output.append('# TYPE mtproxy_responses_per_second gauge')
         output.append(f'mtproxy_responses_per_second {rates["responses_per_sec"]:.2f} {timestamp}')
+        output.append('')
+        
+        # Трафик в байтах в секунду
+        output.append('# HELP mtproxy_bytes_read_per_second Bytes read per second from TCP sockets')
+        output.append('# TYPE mtproxy_bytes_read_per_second gauge')
+        output.append(f'mtproxy_bytes_read_per_second {rates["bytes_read_per_sec"]:.2f} {timestamp}')
+        output.append('')
+        
+        output.append('# HELP mtproxy_bytes_write_per_second Bytes written per second to TCP sockets')
+        output.append('# TYPE mtproxy_bytes_write_per_second gauge')
+        output.append(f'mtproxy_bytes_write_per_second {rates["bytes_write_per_sec"]:.2f} {timestamp}')
         output.append('')
         
         # Статус здоровья (1 = healthy, 0 = unhealthy)
