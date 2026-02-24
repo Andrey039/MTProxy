@@ -6,22 +6,18 @@ services:
     # image: your-dockerhub-username/mtproxy:latest  # Uncomment to use pre-built image
     container_name: mtproxy
     restart: unless-stopped
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    ports:
-      - "443:443"   # Client port
-      - "8888:8888" # Stats port (localhost only)
     environment:
       - SECRET=${SECRET:-}  # Set in .env file
     volumes:
       - ./proxy-secret:/app/proxy-secret:ro
       - ./proxy-multi.conf:/app/proxy-multi.conf:ro
+    network_mode: "host"
     command: [
       "-u", "nobody",
       "-p", "8888", 
       "-H", "443",
       "-S", "${SECRET}",
+      "--http-stats",
       "-M", "1"
     ]
     healthcheck:
@@ -30,3 +26,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  metrics-exporter:
+    build: ./metrics-exporter
+    container_name: mtproxy-metrics
+    restart: unless-stopped
+    network_mode: "host"
+    depends_on:
+      - mtproxy
