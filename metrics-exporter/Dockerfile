@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY metrics-exporter.py /app/
+COPY metrics-exporter.py dashboard.html /app/
 
 EXPOSE 9090
 

@@ -5,6 +5,7 @@ MTProxy Metrics Exporter
 """
 
 import json
+import os
 import re
 import time
 from collections import deque
@@ -65,6 +66,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.send_metrics()
         elif self.path == '/health':
             self.send_health()
+        elif self.path == '/status':
+            self.send_human_status()
+        elif self.path == '/' or self.path == '/dashboard':
+            self.send_dashboard()
         else:
             self.send_response(404)
             self.end_headers()
@@ -101,6 +106,43 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode('utf-8'))
 
+    def send_human_status(self):
+        try:
+            metrics = self.get_mtproxy_metrics()
+            self.update_history(metrics)
+            rates = self.calculate_rates()
+            response = self.format_human_status(metrics, rates)
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(json.dumps(response, indent=2, ensure_ascii=False).encode('utf-8'))
+        except Exception as e:
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}, indent=2).encode('utf-8'))
+
+    def send_dashboard(self):
+        try:
+            # Читаем HTML файл
+            dashboard_path = os.path.join(os.path.dirname(__file__), 'dashboard.html')
+            with open(dashboard_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(html_content.encode('utf-8'))
+        except FileNotFoundError:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Dashboard file not found")
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(f"Error loading dashboard: {str(e)}".encode('utf-8'))
+
     def get_mtproxy_metrics(self):
         """Получает метрики от MTProxy"""
         try:
@@ -119,6 +161,106 @@ class MetricsHandler(BaseHTTPRequestHandler):
             return metrics
         except URLError as e:
             raise Exception(f"Failed to connect to MTProxy stats: {e}")
+
+    def format_human_status(self, metrics, rates):
+        """Форматирует статус в человекочитаемом виде"""
+        
+        def format_bytes(bytes_value):
+            """Конвертирует байты в читаемый формат"""
+            if bytes_value < 1024:
+                return f"{bytes_value} B"
+            elif bytes_value < 1024 * 1024:
+                return f"{bytes_value / 1024:.1f} KB"
+            elif bytes_value < 1024 * 1024 * 1024:
+                return f"{bytes_value / (1024 * 1024):.1f} MB"
+            else:
+                return f"{bytes_value / (1024 * 1024 * 1024):.1f} GB"
+        
+        def format_speed(bytes_per_sec):
+            """Конвертирует байты/сек в читаемый формат"""
+            if bytes_per_sec < 1024:
+                return f"{bytes_per_sec:.1f} B/s"
+            elif bytes_per_sec < 1024 * 1024:
+                return f"{bytes_per_sec / 1024:.1f} KB/s"
+            else:
+                return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+        
+        def format_uptime(seconds):
+            """Конвертирует секунды в читаемый формат времени"""
+            if seconds < 60:
+                return f"{int(seconds)} сек"
+            elif seconds < 3600:
+                return f"{int(seconds // 60)} мин {int(seconds % 60)} сек"
+            elif seconds < 86400:
+                hours = int(seconds // 3600)
+                minutes = int((seconds % 3600) // 60)
+                return f"{hours} ч {minutes} мин"
+            else:
+                days = int(seconds // 86400)
+                hours = int((seconds % 86400) // 3600)
+                return f"{days} дн {hours} ч"
+        
+        # Определяем статус
+        ready_connections = metrics.get('ready_outbound_connections', 0)
+        if ready_connections > 10:
+            status = "🟢 Отлично"
+        elif ready_connections > 5:
+            status = "🟡 Хорошо"
+        elif ready_connections > 0:
+            status = "🟠 Работает"
+        else:
+            status = "🔴 Проблемы"
+        
+        # Общая статистика
+        total_read = metrics.get('tcp_readv_bytes', 0)
+        total_write = metrics.get('tcp_writev_bytes', 0)
+        total_traffic = total_read + total_write
+        
+        current_read_speed = rates.get('bytes_read_per_sec', 0)
+        current_write_speed = rates.get('bytes_write_per_sec', 0)
+        current_total_speed = current_read_speed + current_write_speed
+        
+        return {
+            "status": status,
+            "uptime": format_uptime(metrics.get('uptime', 0)),
+            "connections": {
+                "clients": metrics.get('inbound_connections', 0),
+                "telegram_servers": metrics.get('ready_outbound_connections', 0),
+                "total_active": metrics.get('active_connections', 0)
+            },
+            "traffic": {
+                "total": {
+                    "received": format_bytes(total_read),
+                    "sent": format_bytes(total_write),
+                    "total": format_bytes(total_traffic)
+                },
+                "current_speed": {
+                    "download": format_speed(current_read_speed),
+                    "upload": format_speed(current_write_speed),
+                    "total": format_speed(current_total_speed)
+                }
+            },
+            "requests": {
+                "total": {
+                    "queries": int(metrics.get('tot_forwarded_queries', 0)),
+                    "responses": int(metrics.get('tot_forwarded_responses', 0))
+                },
+                "per_second": {
+                    "queries": f"{rates.get('queries_per_sec', 0):.1f}",
+                    "responses": f"{rates.get('responses_per_sec', 0):.1f}"
+                }
+            },
+            "telegram_servers": {
+                "ready": metrics.get('ready_targets', 0),
+                "active": metrics.get('active_targets', 0),
+                "total_connections": metrics.get('outbound_connections', 0)
+            },
+            "performance": {
+                "cpu_idle": f"{metrics.get('average_idle_percent', 0):.1f}%",
+                "memory_mb": f"{metrics.get('vmrss_bytes', 0) / (1024 * 1024):.1f} MB"
+            },
+            "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
 
     def format_prometheus_metrics(self, metrics, rates):
         """Форматирует метрики в формате Prometheus"""
@@ -191,8 +333,10 @@ def main():
     port = 9090
     server = HTTPServer(('0.0.0.0', port), MetricsHandler)
     print(f"MTProxy Metrics Exporter started on port {port}")
+    print(f"Dashboard: http://localhost:{port}/")
     print(f"Metrics: http://localhost:{port}/metrics")
     print(f"Health: http://localhost:{port}/health")
+    print(f"Status: http://localhost:{port}/status")
     
     try:
         server.serve_forever()
